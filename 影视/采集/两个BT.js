@@ -40,6 +40,41 @@ const logError = (message, error) => {
   OmniBox.log("error", `[两个BT-DEBUG] ${message}: ${error.message || error}`);
 };
 
+const encodeMeta = (obj) => {
+  try {
+    return Buffer.from(JSON.stringify(obj || {}), "utf8").toString("base64");
+  } catch {
+    return "";
+  }
+};
+
+const decodeMeta = (str) => {
+  try {
+    const raw = Buffer.from(str || "", "base64").toString("utf8");
+    return JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+};
+
+const buildScrapedEpisodeName = (scrapeData, mapping, originalName) => {
+  if (!mapping || mapping.episodeNumber === 0 || (mapping.confidence && mapping.confidence < 0.5)) {
+    return originalName;
+  }
+  if (mapping.episodeName) {
+    return mapping.episodeName;
+  }
+  if (scrapeData && Array.isArray(scrapeData.episodes)) {
+    const hit = scrapeData.episodes.find(
+      (ep) => ep.episodeNumber === mapping.episodeNumber && ep.seasonNumber === mapping.seasonNumber
+    );
+    if (hit?.name) {
+      return `${hit.episodeNumber}.${hit.name}`;
+    }
+  }
+  return originalName;
+};
+
 /**
  * 图像地址修复
  */
@@ -185,9 +220,12 @@ const parsePlaySources = ($, vodId) => {
       if (epTitle && epUrl) {
         const playIdMatch = epUrl.match(/\/v_play\/([^.]+)\.html/);
         if (playIdMatch) {
+          const fid = `${vodId}#0#${i}`;
           episodes.push({
             name: epTitle,
-            playId: playIdMatch[1],
+            playId: `${playIdMatch[1]}|||${encodeMeta({ sid: String(vodId || ""), fid, e: epTitle })}`,
+            _fid: fid,
+            _rawName: epTitle,
           });
         }
       }
@@ -413,20 +451,99 @@ async function detail(params) {
 
     const playSources = parsePlaySources($, videoId);
 
+    let scrapeData = null;
+    let videoMappings = [];
+    let scrapeType = "";
+    const scrapeCandidates = [];
+
+    for (const source of playSources) {
+      for (const ep of source.episodes || []) {
+        if (!ep._fid) continue;
+        scrapeCandidates.push({
+          fid: ep._fid,
+          file_id: ep._fid,
+          file_name: ep._rawName || ep.name || "正片",
+          name: ep._rawName || ep.name || "正片",
+          format_type: "video",
+        });
+      }
+    }
+
+    if (scrapeCandidates.length > 0) {
+      try {
+        const sourceId = `spider_source_${await OmniBox.getSourceId()}_${String(videoId || "")}`;
+        const scrapingResult = await OmniBox.processScraping(sourceId, title || "", title || "", scrapeCandidates);
+        OmniBox.log("info", `[两个BT-DEBUG] 刮削处理完成,结果: ${JSON.stringify(scrapingResult || {}).substring(0, 200)}`);
+
+        const metadata = await OmniBox.getScrapeMetadata(sourceId);
+        scrapeData = metadata?.scrapeData || null;
+        videoMappings = metadata?.videoMappings || [];
+        scrapeType = metadata?.scrapeType || "";
+        logInfo("刮削元数据读取完成", { hasScrapeData: !!scrapeData, mappingCount: videoMappings.length, scrapeType });
+      } catch (e) {
+        logError("刮削处理失败", e);
+      }
+    }
+
+    for (const source of playSources) {
+      for (const ep of source.episodes || []) {
+        const mapping = videoMappings.find((m) => m?.fileId === ep._fid);
+        if (!mapping) continue;
+        const oldName = ep.name;
+        const newName = buildScrapedEpisodeName(scrapeData, mapping, oldName);
+        if (newName && newName !== oldName) {
+          ep.name = newName;
+          OmniBox.log("info", `[两个BT-DEBUG] 应用刮削后源文件名: ${oldName} -> ${newName}`);
+        }
+        ep._seasonNumber = mapping.seasonNumber;
+        ep._episodeNumber = mapping.episodeNumber;
+      }
+
+      const hasEpisodeNumber = (source.episodes || []).some(
+        (ep) => ep._episodeNumber !== undefined && ep._episodeNumber !== null
+      );
+      if (hasEpisodeNumber) {
+        source.episodes.sort((a, b) => {
+          const seasonA = a._seasonNumber || 0;
+          const seasonB = b._seasonNumber || 0;
+          if (seasonA !== seasonB) return seasonA - seasonB;
+          const episodeA = a._episodeNumber || 0;
+          const episodeB = b._episodeNumber || 0;
+          return episodeA - episodeB;
+        });
+      }
+    }
+
+    const normalizedPlaySources = playSources.map((source) => ({
+      name: source.name,
+      episodes: (source.episodes || []).map((ep) => ({
+        name: ep.name,
+        playId: ep.playId,
+      })),
+    }));
+
     logInfo("详情接口返回数据");
 
     return {
       list: [
         {
           vod_id: String(videoId),
-          vod_name: title || "未知标题",
-          vod_pic: fixPicUrl(pic),
-          vod_content: desc || "",
-          vod_play_sources: playSources,
+          vod_name: scrapeData?.title || title || "未知标题",
+          vod_pic: scrapeData?.posterPath ? `https://image.tmdb.org/t/p/w500${scrapeData.posterPath}` : fixPicUrl(pic),
+          vod_content: scrapeData?.overview || desc || "",
+          vod_play_sources: normalizedPlaySources,
           vod_year: "",
           vod_area: "",
-          vod_actor: actor || "",
-          vod_director: director || "",
+          vod_actor: (scrapeData?.credits?.cast || []).slice(0, 5).map((c) => c?.name).filter(Boolean).join(",") || actor || "",
+          vod_director:
+            (scrapeData?.credits?.crew || [])
+              .filter((c) => c?.job === "Director" || c?.department === "Directing")
+              .slice(0, 3)
+              .map((c) => c?.name)
+              .filter(Boolean)
+              .join(",") ||
+            director ||
+            "",
           type_name: "",
         },
       ],
@@ -438,17 +555,37 @@ async function detail(params) {
 }
 
 async function play(params) {
-  const playId = params.playId;
-  logInfo(`准备播放 ID: ${playId}`);
+  const rawPlayId = params.playId;
+  logInfo(`准备播放 ID: ${rawPlayId}`);
 
   try {
-    let playUrl = playId;
+    let playUrl = rawPlayId;
+    let playMeta = {};
+    if (rawPlayId && rawPlayId.includes("|||")) {
+      const [mainPlayId, metaB64] = rawPlayId.split("|||");
+      playUrl = mainPlayId;
+      playMeta = decodeMeta(metaB64 || "");
+    }
 
     // 如果是Base64编码的播放ID，构建播放页URL
     if (playUrl && !playUrl.includes("://") && playUrl.length > 10) {
-      const decodedId = Buffer.from(playId, "base64").toString("utf-8");
+      const decodedId = Buffer.from(playUrl, "base64").toString("utf-8");
       logInfo(`解码播放ID: ${decodedId}`);
-      playUrl = `${host}/v_play/${playId}.html`;
+      playUrl = `${host}/v_play/${playUrl}.html`;
+    }
+
+    try {
+      const videoIdFromParam = params.vodId ? String(params.vodId) : "";
+      const videoIdFromMeta = playMeta?.sid ? String(playMeta.sid) : "";
+      const videoIdForScrape = videoIdFromParam || videoIdFromMeta;
+      const sourceId = videoIdForScrape
+        ? `spider_source_${await OmniBox.getSourceId()}_${videoIdForScrape}`
+        : "";
+      if (sourceId) {
+        await OmniBox.getScrapeMetadata(sourceId);
+      }
+    } catch (e) {
+      logInfo(`读取刮削元数据失败: ${e.message}`);
     }
 
     // 确保URL格式正确
@@ -485,7 +622,7 @@ async function play(params) {
   } catch (e) {
     logError("解析播放地址失败", e);
     // 错误时也构建完整URL
-    const fallbackUrl = `${host}/v_play/${playId}.html`;
+    const fallbackUrl = `${host}/v_play/${rawPlayId}.html`;
     return {
       urls: [{ name: "默认线路", url: fallbackUrl }],
       parse: 1,
