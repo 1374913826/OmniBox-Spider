@@ -1,6 +1,10 @@
-// @name 乐兔[广]
+// @name 乐兔
+// @author 
+// @description 刮削：支持，弹幕：支持，嗅探：支持，广告：有
+// @version 1.0.0
+// @downloadURL https://xget.xi-xu.me/gh/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/采集/乐兔.js
 /**
- * OmniBox 爬虫脚本 - 乐兔[广]
+ * 质量较差不建议加入
  *
  * 说明：
  * 1. 由 `本地调试/乐兔.js` 转换为 OmniBox 标准接口。
@@ -246,6 +250,25 @@ function buildScrapedDanmuFileName(scrapeData, scrapeType, mapping, fallbackVodN
   const seasonNumber = mapping?.seasonNumber || 1;
   const episodeNumber = mapping?.episodeNumber || 1;
   return `${title}.${seasonAirYear}.S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`;
+}
+
+async function sniffLetuPlay(playUrl) {
+  if (!playUrl) return null;
+  try {
+    logInfo("尝试嗅探播放页", playUrl);
+    const sniffed = await OmniBox.sniffVideo(playUrl);
+    if (sniffed && sniffed.url) {
+      logInfo("嗅探成功", sniffed.url);
+      return {
+        urls: [{ name: "嗅探线路", url: sniffed.url }],
+        parse: 0,
+        header: sniffed.header || { ...DEFAULT_HEADERS, Referer: playUrl },
+      };
+    }
+  } catch (error) {
+    logInfo(`嗅探失败: ${error.message}`);
+  }
+  return null;
 }
 
 async function matchDanmu(fileName) {
@@ -567,6 +590,9 @@ async function getPlay(playId, vodName = "", episodeName = "", vodId = "") {
       // ignore
     }
 
+    const sniffResult = await sniffLetuPlay(playPageUrl);
+    if (sniffResult) return sniffResult;
+
     return {
       urls: [{ name: "解析", url: playPageUrl }],
       parse: 1,
@@ -574,6 +600,8 @@ async function getPlay(playId, vodName = "", episodeName = "", vodId = "") {
     };
   } catch (error) {
     logError("播放解析失败", error);
+    const sniffResult = await sniffLetuPlay(toAbsUrl(playId));
+    if (sniffResult) return sniffResult;
     return {
       urls: [{ name: "解析", url: toAbsUrl(playId) }],
       parse: 1,
