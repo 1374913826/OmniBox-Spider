@@ -2,7 +2,7 @@
 # @name 人人电影
 # @author 梦
 # @description 影视站：https://www.rrdynb.com/ ，支持首页、分类、搜索、详情与网盘线路提取（Python版）
-# @version 1.1.2
+# @version 1.1.3
 # @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/网盘/人人电影.py
 
 import json
@@ -14,6 +14,10 @@ from spider_runner import OmniBox, run
 
 BASE_URL = "https://www.rrdynb.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+RRDYNB_FLARESOLVERR_URL = str(os.environ.get("RRDYNB_FLARESOLVERR_URL") or "http://192.168.50.50:8191/v1").strip()
+RRDYNB_FLARESOLVERR_SESSION = str(os.environ.get("RRDYNB_FLARESOLVERR_SESSION") or "rrdynb-search").strip()
+RRDYNB_FLARESOLVERR_TIMEOUT_MS = max(10000, int(os.environ.get("RRDYNB_FLARESOLVERR_TIMEOUT_MS", "60000") or 60000))
+RRDYNB_SEARCH_USE_FLARESOLVERR = str(os.environ.get("RRDYNB_SEARCH_USE_FLARESOLVERR", "true")).lower() == "true"
 
 CATEGORY_MAP = {
     "movie": {"type_id": "2", "type_name": "电影", "path": "/movie/"},
@@ -124,6 +128,50 @@ async def request_text(url: str, referer: str = None) -> str:
     if status != 200:
         raise RuntimeError(f"HTTP {status} @ {url}")
     return text
+
+
+async def request_text_via_flaresolverr(url: str, referer: str = None) -> str:
+    if not RRDYNB_FLARESOLVERR_URL:
+        raise RuntimeError("FlareSolverr URL not configured")
+
+    payload = {
+        "cmd": "request.get",
+        "url": url,
+        "maxTimeout": RRDYNB_FLARESOLVERR_TIMEOUT_MS,
+        "session": RRDYNB_FLARESOLVERR_SESSION,
+        "headers": {
+            "User-Agent": UA,
+            "Referer": referer or f"{BASE_URL}/",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        },
+    }
+    await log("info", f"[rrdynb][flaresolverr] url={url} session={RRDYNB_FLARESOLVERR_SESSION}")
+    res = await OmniBox.request(RRDYNB_FLARESOLVERR_URL, {
+        "method": "POST",
+        "headers": {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        "body": json.dumps(payload, ensure_ascii=False),
+    })
+    status = int(res.get("statusCode") or 0)
+    body = res.get("body", "")
+    text = body.decode("utf-8", "ignore") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    if status != 200:
+        raise RuntimeError(f"FlareSolverr HTTP {status}")
+
+    data = json.loads(text or "{}")
+    if str(data.get("status") or "").lower() != "ok":
+        raise RuntimeError(f"FlareSolverr status={data.get('status')} message={data.get('message')}")
+
+    solution = data.get("solution") or {}
+    solution_status = int(solution.get("status") or 0)
+    response_text = str(solution.get("response") or "")
+    if solution_status != 200:
+        raise RuntimeError(f"FlareSolverr solution HTTP {solution_status} @ {url}")
+    if not response_text:
+        raise RuntimeError(f"FlareSolverr empty response @ {url}")
+    return response_text
 
 
 async def get_cached_json(key: str):
@@ -653,7 +701,15 @@ async def search(params, context):
         if page > 1:
             return {"page": page, "pagecount": 1, "total": 0, "list": []}
         url = f"{BASE_URL}/plus/search.php?q={quote(keyword)}&pagesize=10"
-        text = await request_text(url, referer=f"{BASE_URL}/")
+        if RRDYNB_SEARCH_USE_FLARESOLVERR:
+            try:
+                text = await request_text_via_flaresolverr(url, referer=f"{BASE_URL}/")
+                await log("info", f"[rrdynb][search] flaresolverr hit len={len(text)}")
+            except Exception as fs_err:
+                await log("warn", f"[rrdynb][search] flaresolverr failed: {fs_err}")
+                text = await request_text(url, referer=f"{BASE_URL}/")
+        else:
+            text = await request_text(url, referer=f"{BASE_URL}/")
         merged = []
         for cfg in CATEGORY_MAP.values():
             merged.extend(extract_cards(text, cfg["type_id"], cfg["type_name"]))
