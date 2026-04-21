@@ -2,7 +2,7 @@
 # @name 人人电影
 # @author 梦
 # @description 影视站：https://www.rrdynb.com/ ，支持首页、分类、搜索、详情与网盘线路提取（Python版）
-# @version 1.1.7
+# @version 1.1.8
 # @downloadURL https://gh-proxy.org/https://github.com/Silent1566/OmniBox-Spider/raw/refs/heads/main/影视/网盘/人人电影.py
 
 import json
@@ -14,7 +14,7 @@ from spider_runner import OmniBox, run
 
 BASE_URL = "https://www.rrdynb.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-RRDYNB_FLARESOLVERR_URL = str(os.environ.get("RRDYNB_FLARESOLVERR_URL") or "http://192.168.50.50:8191/v1").strip()
+RRDYNB_FLARESOLVERR_URL = str(os.environ.get("RRDYNB_FLARESOLVERR_URL") or "").strip()
 RRDYNB_FLARESOLVERR_SESSION = str(os.environ.get("RRDYNB_FLARESOLVERR_SESSION") or "rrdynb-search").strip()
 RRDYNB_FLARESOLVERR_TIMEOUT_MS = max(10000, int(os.environ.get("RRDYNB_FLARESOLVERR_TIMEOUT_MS", "60000") or 60000))
 RRDYNB_SEARCH_USE_FLARESOLVERR = str(os.environ.get("RRDYNB_SEARCH_USE_FLARESOLVERR", "true")).lower() == "true"
