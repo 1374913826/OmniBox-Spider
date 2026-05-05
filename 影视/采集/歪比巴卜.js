@@ -6,7 +6,7 @@
  * @searchable 1
  * @quickSearch 1
  * @changeable 0
- * @version 1.0.1
+ * @version 1.0.2
  * @downloadURL https://github.com/Silent1566/OmniBox-Spider/raw/main/影视/采集/歪比巴卜.js
  */
 
@@ -377,8 +377,9 @@ async function detail(params = {}) {
       const groups = parsePlayGroups(html);
       OmniBox.log('info', `[wbbb][detail][12] groups 解析完成 count=${groups.length}, episodeCounts=${groups.map(g => g.length).join('/') || '空'}`);
 
-      const playFrom = [];
-      const playUrl = [];
+      let playFrom = [];
+      let playUrl = [];
+      let playListGroups = groups;
       OmniBox.log('info', '[wbbb][detail][13] 开始组装 vod_play_from / vod_play_url');
       groups.forEach((items, idx) => {
         const lineName = tabs[idx] || `线路${idx + 1}`;
@@ -389,6 +390,25 @@ async function detail(params = {}) {
         playFrom.push(lineName);
         playUrl.push(items.join('#'));
       });
+      // 如果结构化分组解析失败，再直接抓取页面中所有 /vplay/ 链接作为单线路兜底。
+      if (playFrom.length === 0) {
+        const seenFallback = new Set();
+        const fallbackItems = [...html.matchAll(/<a[^>]+href=["']([^"']*\/vplay\/[^"']+\.html)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+          .map((m, index) => {
+            const href = absUrl(m[1]);
+            const name = stripTags(m[2]).trim() || `第${index + 1}集`;
+            if (!href || seenFallback.has(href)) return '';
+            seenFallback.add(href);
+            return `${name}$${href}`;
+          })
+          .filter(Boolean);
+        if (fallbackItems.length) {
+          playListGroups = [fallbackItems];
+          playFrom = [tabs[0] || '播放线路'];
+          playUrl = [fallbackItems.join('#')];
+          OmniBox.log('info', `[wbbb][detail][fallback] 结构化线路为空，捕获到 ${fallbackItems.length} 条 vplay 链接作为兜底线路`);
+        }
+      }
       const vodPlayFrom = playFrom.join('$$$');
       const vodPlayUrl = playUrl.join('$$$');
       OmniBox.log('info', `[wbbb][detail][14] 播放字段组装完成 fromCount=${playFrom.length}, urlGroupCount=${playUrl.length}, vod_play_url_length=${vodPlayUrl.length}, firstLine=${playFrom[0] || '空'}, firstEpisode=${groups[0]?.[0] || '空'}`);
