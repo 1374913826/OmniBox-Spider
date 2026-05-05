@@ -1,3 +1,18 @@
+/**
+ * @name 歪比巴卜
+ * @key wbbb
+ * @type 4
+ * @api /video/wbbb
+ * @searchable 1
+ * @quickSearch 1
+ * @changeable 0
+ * @version 1.0.0
+ * @downloadURL https://github.com/Silent1566/OmniBox-Spider/raw/main/影视/采集/歪比巴卜.js
+ */
+
+const OmniBox = require('omnibox_sdk');
+const runner = require('spider_runner');
+
 const axios = require('axios');
 const http = require('http');
 const https = require('https');
@@ -5,9 +20,9 @@ const vm = require('vm');
 const CryptoJS = require('crypto-js');
 
 const SITE = {
-  key: 'wbbb_note',
+  key: 'wbbb',
   name: '歪比巴卜',
-  api: '/video/wbbb_note',
+  api: '/video/wbbb',
   host: 'https://wbbb1.com',
   ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
   timeout: 20000,
@@ -35,9 +50,7 @@ const httpClient = axios.create({
 });
 
 function ok(res) {
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`HTTP ${res.status}`);
-  }
+  if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
   return res.data || '';
 }
 
@@ -80,7 +93,7 @@ function absUrl(url = '') {
 
 function normalizeVodFromCard(block) {
   const vod_id = pickMatch(block, /href="\/detail\/(\d+)\.html"/, 1, '');
-  const vod_name = stripTags(pickMatch(block, /<div class="module-(?:poster-item-title|card-item-title)">([\s\S]*?)<\/div>/, 1, '')) || pickMatch(block, /alt="([^"]+)"/, 1, '');
+  const vod_name = stripTags(pickMatch(block, /<div class="module-(?:poster-item-title|card-item-title)>([\s\S]*?)<\/div>/, 1, '')) || pickMatch(block, /alt="([^"]+)"/, 1, '');
   const vod_pic = absUrl(pickMatch(block, /(?:data-original|data-src|src)="([^"]+)"/, 1, ''));
   const vod_remarks = stripTags(pickMatch(block, /<div class="module-item-note">([\s\S]*?)<\/div>/, 1, ''));
   return { vod_id, vod_name, vod_pic, vod_remarks };
@@ -100,7 +113,6 @@ function parseCards(html) {
     });
   }
   if (list.length) return list;
-
   const reg2 = /<div class="module-card-item module-item">([\s\S]*?)<\/div>\s*<\/div>/g;
   while ((m = reg2.exec(html)) !== null) {
     const vod = normalizeVodFromCard(m[1]);
@@ -143,9 +155,7 @@ function parsePlayGroups(detailHtml) {
     }
     if (items.length) groups.push(items);
   }
-
   if (groups.length) return groups;
-
   const hrefOnly = [...detailHtml.matchAll(/<a[^>]+href="([^\"]*\/(?:vplay|play)\/[^\"#]+)"[^>]*>([\s\S]*?)<\/a>/g)];
   if (hrefOnly.length) {
     return [hrefOnly.map((mm) => `${stripTags(mm[2]).trim() || '播放'}$${absUrl(mm[1])}`)];
@@ -271,174 +281,125 @@ async function resolveWbbbPlayerUrl(playerToken, nextUrl, title) {
   return { url: payload.url, type: payload.type || '' };
 }
 
-async function home() {
-  return { class: CATS, list: [] };
-}
-
-async function category({ id, page }) {
-  const pg = parseInt(page || '1', 10) || 1;
-  const path = pg > 1 ? `/show/${id}--------${pg}---.html` : `/show/${id}-----------.html`;
-  const html = await getHtml(path);
-  const list = parseCards(html);
-  const hasNext = html.includes('title="下一页"');
-  return {
-    list,
-    page: pg,
-    pagecount: hasNext ? pg + 1 : pg,
-    total: list.length,
-  };
-}
-
-async function detail({ id }) {
-  const list = [];
-  for (const rawId of id) {
-    const mediaId = String(rawId).trim();
-    const html = await getHtml(`/detail/${mediaId}.html`);
-
-    const vod_name = stripTags(pickMatch(html, /<h1[^>]*>([\s\S]*?)<\/h1>/, 1, ''));
-    const vod_pic = absUrl(pickMatch(html, /<div class="module-item-pic">[\s\S]*?<img[^>]+data-original="([^\"]+)"/, 1, ''))
-      || absUrl(pickMatch(html, /<div class="module-item-pic">[\s\S]*?<img[^>]+(?:data-src|src)="([^\"]+)"/, 1, ''));
-    const vod_content = stripTags(pickMatch(html, /<div class="module-info-introduction-content[^>]*>([\s\S]*?)<\/div>/, 1, ''));
-    const tagLinks = [...html.matchAll(/<div class="module-info-tag-link">([\s\S]*?)<\/div>/g)].map(x => x[1]);
-    const vod_year = stripTags(tagLinks[0] || '');
-    const vod_area = stripTags(tagLinks[1] || '');
-    const vod_type = cleanSlashText(tagLinks[2] || '');
-    const vod_remarks = stripTags(pickMatch(html, /<div class="module-item-note">([\s\S]*?)<\/div>/, 1, '')) || stripTags(pickMatch(html, /更新至[^<\s]+/, 0, ''));
-    const vod_director = cleanSlashText(pickMatch(html, /导演：[\s\S]*?<div[^>]*class="module-info-item-content">([\s\S]*?)<\/div>/, 1, ''));
-    const vod_actor = cleanSlashText(pickMatch(html, /主演：[\s\S]*?<div[^>]*class="module-info-item-content">([\s\S]*?)<\/div>/, 1, ''));
-
-    const tabs = parseTabs(html);
-    const groups = parsePlayGroups(html);
-    const playFrom = [];
-    const playUrl = [];
-    groups.forEach((items, idx) => {
-      const lineName = tabs[idx] || `线路${idx + 1}`;
-      if (!items || !items.length) return;
-      playFrom.push(lineName);
-      playUrl.push(items.join('#'));
-    });
-
-    list.push({
-      vod_id: mediaId,
-      vod_name,
-      vod_pic,
-      type_name: vod_type,
-      vod_year,
-      vod_area,
-      vod_remarks,
-      vod_actor,
-      vod_director,
-      vod_content,
-      vod_play_from: playFrom.join('$$$'),
-      vod_play_url: playUrl.join('$$$'),
-    });
-  }
-  return { list };
-}
-
-async function search({ page, wd }) {
-  const pg = parseInt(page || '1', 10) || 1;
-  const path = pg > 1 ? `/search/-------------.html?wd=${encodeURIComponent(wd)}&page=${pg}` : `/search/-------------.html?wd=${encodeURIComponent(wd)}`;
-  const html = await getHtml(path);
-  const list = parseCards(html);
-  return {
-    list,
-    page: pg,
-    pagecount: list.length >= 20 ? pg + 1 : pg,
-    total: list.length,
-  };
-}
-
-async function play({ id }) {
-  const html = await getHtml(id);
-  const player = parsePlayer(html);
-  if (!player) {
-    return { parse: 1, jx: 1, url: id };
+class WbbbSpider extends OmniBox.Spider {
+  async home() {
+    return { class: CATS, list: [] };
   }
 
-  let url = decodePlayUrl(player.url, player.encrypt);
-  const from = String(player.from || '').trim();
-  const nextUrl = player.link_next ? absUrl(player.link_next) : '';
-  const title = player.vod_data && player.vod_data.vod_name ? String(player.vod_data.vod_name) : '';
-
-  if (isDirectMediaUrl(url, from)) {
-    return { parse: 0, jx: 0, url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+  async category({ id, page }) {
+    const pg = parseInt(page || '1', 10) || 1;
+    const path = pg > 1 ? `/show/${id}--------${pg}---.html` : `/show/${id}-----------.html`;
+    const html = await getHtml(path);
+    const list = parseCards(html);
+    const hasNext = html.includes('title="下一页"');
+    return { list, page: pg, pagecount: hasNext ? pg + 1 : pg, total: list.length };
   }
 
-  const parseApi = String(player.parse || player.jx || '').trim();
-  if (parseApi) {
-    const jump = /^https?:\/\//i.test(parseApi) ? `${parseApi}${encodeURIComponent(url)}` : absUrl(`${parseApi}${encodeURIComponent(url)}`);
-    return { parse: 0, jx: 0, url: jump, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
-  }
+  async detail({ id }) {
+    const list = [];
+    for (const rawId of id) {
+      const mediaId = String(rawId).trim();
+      const html = await getHtml(`/detail/${mediaId}.html`);
+      const vod_name = stripTags(pickMatch(html, /<h1[^>]*>([\s\S]*?)<\/h1>/, 1, ''));
+      const vod_pic = absUrl(pickMatch(html, /<div class="module-item-pic">[\s\S]*?<img[^>]+data-original="([^\"]+)"/, 1, ''))
+        || absUrl(pickMatch(html, /<div class="module-item-pic">[\s\S]*?<img[^>]+(?:data-src|src)="([^\"]+)"/, 1, ''));
+      const vod_content = stripTags(pickMatch(html, /<div class="module-info-introduction-content[^>]*>([\s\S]*?)<\/div>/, 1, ''));
+      const tagLinks = [...html.matchAll(/<div class="module-info-tag-link">([\s\S]*?)<\/div>/g)].map(x => x[1]);
+      const vod_year = stripTags(tagLinks[0] || '');
+      const vod_area = stripTags(tagLinks[1] || '');
+      const vod_type = cleanSlashText(tagLinks[2] || '');
+      const vod_remarks = stripTags(pickMatch(html, /<div class="module-item-note">([\s\S]*?)<\/div>/, 1, '')) || stripTags(pickMatch(html, /更新至[^<\s]+/, 0, ''));
+      const vod_director = cleanSlashText(pickMatch(html, /导演：[\s\S]*?<div[^>]*class="module-info-item-content">([\s\S]*?)<\/div>/, 1, ''));
+      const vod_actor = cleanSlashText(pickMatch(html, /主演：[\s\S]*?<div[^>]*class="module-info-item-content">([\s\S]*?)<\/div>/, 1, ''));
 
-  try {
-    const resolved = await resolveWbbbPlayerUrl(String(player.url || ''), nextUrl, title);
-    if (resolved && resolved.url) {
-      return { parse: 0, jx: 0, url: resolved.url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+      const tabs = parseTabs(html);
+      const groups = parsePlayGroups(html);
+      const playFrom = [];
+      const playUrl = [];
+      groups.forEach((items, idx) => {
+        const lineName = tabs[idx] || `线路${idx + 1}`;
+        if (!items || !items.length) return;
+        playFrom.push(lineName);
+        playUrl.push(items.join('#'));
+      });
+
+      list.push({
+        vod_id: mediaId,
+        vod_name,
+        vod_pic,
+        type_name: vod_type,
+        vod_year,
+        vod_area,
+        vod_remarks,
+        vod_actor,
+        vod_director,
+        vod_content,
+        vod_play_from: playFrom.join('$$$'),
+        vod_play_url: playUrl.join('$$$'),
+      });
     }
-  } catch (_) {}
+    return { list };
+  }
 
-  const parseCandidates = [
-    '/static/js/playerconfig.js',
-    `/static/player/${from}.js`,
-    `/static/player/config.js`,
-    '/js/playerconfig.js',
-    '/player/config.js',
-  ];
+  async search({ page, wd }) {
+    const pg = parseInt(page || '1', 10) || 1;
+    const path = pg > 1 ? `/search/-------------.html?wd=${encodeURIComponent(wd)}&page=${pg}` : `/search/-------------.html?wd=${encodeURIComponent(wd)}`;
+    const html = await getHtml(path);
+    const list = parseCards(html);
+    return { list, page: pg, pagecount: list.length >= 20 ? pg + 1 : pg, total: list.length };
+  }
 
-  for (const p of parseCandidates) {
+  async play({ id }) {
+    const html = await getHtml(id);
+    const player = parsePlayer(html);
+    if (!player) return { parse: 1, jx: 1, url: id };
+    let url = decodePlayUrl(player.url, player.encrypt);
+    const from = String(player.from || '').trim();
+    const nextUrl = player.link_next ? absUrl(player.link_next) : '';
+    const title = player.vod_data && player.vod_data.vod_name ? String(player.vod_data.vod_name) : '';
+    if (isDirectMediaUrl(url, from)) {
+      return { parse: 0, jx: 0, url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+    }
+    const parseApi = String(player.parse || player.jx || '').trim();
+    if (parseApi) {
+      const jump = /^https?:\/\//i.test(parseApi) ? `${parseApi}${encodeURIComponent(url)}` : absUrl(`${parseApi}${encodeURIComponent(url)}`);
+      return { parse: 0, jx: 0, url: jump, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+    }
     try {
-      const conf = await getHtml(p);
-      const escapedFrom = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regs = [
-        new RegExp(`player_list\\s*\\[\\s*['\"]${escapedFrom}['\"]\\s*\\]\\s*=\\s*\\{[\\s\\S]*?parse\\s*:\\s*['\"]([^'\"]+)['\"]`, 'i'),
-        new RegExp(`${escapedFrom}[\\s\\S]*?parse\\s*[:=]\\s*['\"]([^'\"]+)['\"]`, 'i'),
-        new RegExp(`"${escapedFrom}"\\s*:\\s*\\{[\\s\\S]*?"parse"\\s*:\\s*"([^\"]*)"`, 'i'),
-        /MacPlayerConfig[\s\S]*?parse['"]?\s*[:=]\s*['"]([^'\"]+)['"]/i,
-      ];
-      for (const reg of regs) {
-        const m = conf.match(reg);
-        if (!m || typeof m[1] !== 'string') continue;
-        const prefix = m[1].trim();
-        if (!prefix) continue;
-        const jump = /^https?:\/\//i.test(prefix)
-          ? `${prefix}${encodeURIComponent(url)}`
-          : absUrl(`${prefix}${encodeURIComponent(url)}`);
-        return { parse: 0, jx: 0, url: jump, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+      const resolved = await resolveWbbbPlayerUrl(String(player.url || ''), nextUrl, title);
+      if (resolved && resolved.url) {
+        return { parse: 0, jx: 0, url: resolved.url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
       }
     } catch (_) {}
+    const parseCandidates = [
+      '/static/js/playerconfig.js',
+      `/static/player/${from}.js`,
+      `/static/player/config.js`,
+      '/js/playerconfig.js',
+      '/player/config.js',
+    ];
+    for (const p of parseCandidates) {
+      try {
+        const conf = await getHtml(p);
+        const escapedFrom = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regs = [
+          new RegExp(`player_list\\s*\\[\\s*['\"]${escapedFrom}['\"]\\s*\\]\\s*=\\s*\\{[\\s\\S]*?parse\\s*:\\s*['\"]([^'\"]+)['\"]`, 'i'),
+          new RegExp(`${escapedFrom}[\\s\\S]*?parse\\s*[:=]\\s*['\"]([^'\"]+)['\"]`, 'i'),
+          new RegExp(`"${escapedFrom}"\\s*:\\s*\\{[\\s\\S]*?"parse"\\s*:\\s*"([^\"]*)"`, 'i'),
+          /MacPlayerConfig[\s\S]*?parse['"]?\s*[:=]\s*['"]([^'\"]+)['"]/i,
+        ];
+        for (const reg of regs) {
+          const m = conf.match(reg);
+          if (!m || typeof m[1] !== 'string') continue;
+          const prefix = m[1].trim();
+          if (!prefix) continue;
+          const jump = /^https?:\/\//i.test(prefix) ? `${prefix}${encodeURIComponent(url)}` : absUrl(`${prefix}${encodeURIComponent(url)}`);
+          return { parse: 0, jx: 0, url: jump, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
+        }
+      } catch (_) {}
+    }
+    return { parse: 1, jx: 1, url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
   }
-
-  return { parse: 1, jx: 1, url, header: { 'User-Agent': SITE.ua, 'Referer': `${SITE.host}/` } };
 }
 
-const meta = {
-  key: SITE.key,
-  name: SITE.name,
-  type: 4,
-  api: SITE.api,
-  searchable: 1,
-  quickSearch: 1,
-  changeable: 0,
-};
-
-module.exports = async (app, opt) => {
-  app.get(meta.api, async (req) => {
-    try {
-      const { ac, t, pg, ids, play: playId, wd } = req.query;
-
-      if (playId) return await play({ id: playId });
-      if (wd) return await search({ page: pg, wd });
-      if (!ac) return await home();
-      if (ac === 'detail') {
-        if (t) return await category({ id: t, page: pg });
-        if (ids) return await detail({ id: ids.split(',').map(x => x.trim()).filter(Boolean) });
-      }
-      return { class: CATS, list: [] };
-    } catch (e) {
-      return { class: CATS, list: [], error: e.message || String(e) };
-    }
-  });
-
-  opt.sites.push(meta);
-};
+runner.run(new WbbbSpider());
